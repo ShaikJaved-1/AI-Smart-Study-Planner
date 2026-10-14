@@ -1,0 +1,30 @@
+{
+  "name": "ai-smart-study-planner",
+  "version": "1.0.0",
+  "description": "AI-Based Smart Study Planner - rule-based study scheduling with Node.js, Express and MySQL",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "db:init": "node sql/init.js",
+    "db:seed": "node sql/seed.js",
+    "test": "node --test",
+    "test:py": "python -m pytest python_tests -v",
+    "test:unit": "jest"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "jest-html-reporter": "^4.4.2",
+    "junit-report-builder": "^5.1.2"
+  }
+}

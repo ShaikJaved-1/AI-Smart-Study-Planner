@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in - Smart Study Planner</title>
+  <script>document.documentElement.dataset.theme = localStorage.getItem('theme') || 'light';</script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="login">
+  <main class="auth-page">
+    <form class="auth-card" id="auth-form" novalidate>
+      <h1>Log in</h1>
+      <p class="muted">Welcome back. Pick up your study plan where you left off.</p>
+      <div class="form-error" id="form-error"></div>
+      <label>Email<input type="email" name="email" autocomplete="email" required></label>
+      <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="btn primary block" type="submit">Log in</button>
+      <p class="muted center">New here? <a href="register.html">Create an account</a></p>
+    </form>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

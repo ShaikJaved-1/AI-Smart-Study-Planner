@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Subjects and topics - Smart Study Planner</title>
+  <script>document.documentElement.dataset.theme = localStorage.getItem('theme') || 'light';</script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="subjects" data-title="Subjects and topics">
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main">
+      <header class="topbar" id="topbar"></header>
+      <main class="content" id="content"><p class="muted">Loading...</p></main>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <div id="modal-root"></div>
+  <script src="app.js"></script>
+</body>
+</html>

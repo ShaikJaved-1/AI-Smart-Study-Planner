@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create account - Smart Study Planner</title>
+  <script>document.documentElement.dataset.theme = localStorage.getItem('theme') || 'light';</script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="register">
+  <main class="auth-page">
+    <form class="auth-card" id="auth-form" novalidate>
+      <h1>Create your account</h1>
+      <p class="muted">Add your subjects, deadlines and exams. The planner does the scheduling.</p>
+      <div class="form-error" id="form-error"></div>
+      <label>Full name<input type="text" name="name" autocomplete="name" required></label>
+      <label>Email<input type="email" name="email" autocomplete="email" required></label>
+      <label>Password (at least 8 characters)<input type="password" name="password" autocomplete="new-password" required></label>
+      <button class="btn primary block" type="submit">Create account</button>
+      <p class="muted center">Already registered? <a href="login.html">Log in</a></p>
+    </form>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
