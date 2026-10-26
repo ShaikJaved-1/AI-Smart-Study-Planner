@@ -29,6 +29,12 @@
   const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return fmt(d); };
   const mondayOf = (s) => addDays(s, -((parse(s).getDay() + 6) % 7));
   const hhmm = (t) => String(t).slice(0, 5);
+  const time12 = (t) => {
+  const [h, m] = String(t).slice(0, 5).split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const hour = h % 12 || 12;
+  return `${hour}:${String(m).padStart(2, '0')} ${period}`;
+};
   const hrs = (n) => `${Math.round(Number(n) * 10) / 10}h`;
   const niceDate = (s) => parse(s).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
   const badge = (v, cls) => `<span class="badge b-${esc(cls || String(v).toLowerCase().replace(/\s+/g, '-'))}">${esc(v)}</span>`;
@@ -159,73 +165,66 @@
   function calendarHtml(ym, data, clickable) {
     const first = new Date(ym.y, ym.m, 1);
     const start = addDays(fmt(first), -((first.getDay() + 6) % 7));
-    const title = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-    let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="dow">${d}</div>`).join('');
+    const title = first.toLocaleDateString(undefined, {
+      month: 'long',
+      year: 'numeric'
+    });
+
+    let cells = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+      .map((d) => `<div class="dow">${d}</div>`)
+      .join('');
+
     for (let i = 0; i < 42; i++) {
       const date = addDays(start, i);
       const dd = parse(date);
       const cls = ['day'];
+
       if (dd.getMonth() !== ym.m) cls.push('other');
       if (date === today()) cls.push('today');
-      const s = (data.sessions[date] || []).filter((x) => x.status !== 'Missed');
-      const a = (data.assignments[date] || []).filter((x) => x.status !== 'Completed');
-      const e = data.exams[date] || [];
-      const total = s.reduce((sum, x) => sum + Number(x.duration_hours), 0);
-      const tags = (s.length ? `<span class="tag s">${s.length} session${s.length > 1 ? 's' : ''}, ${hrs(total)}</span>` : '')
-        + a.slice(0, 1).map((x) => `<span class="tag a">Due: ${esc(x.title)}</span>`).join('')
-        + e.slice(0, 1).map((x) => `<span class="tag e">Exam: ${esc(x.exam_name)}</span>`).join('');
+
+      const sessions = (data.sessions[date] || [])
+        .filter((x) => x.status !== 'Missed');
+
+      const assignments = (data.assignments[date] || [])
+        .filter((x) => x.status !== 'Completed');
+
+      const exams = data.exams[date] || [];
+
+      const topicSessions = sessions.filter((x) => x.topic_id);
+      const examPrepSessions = sessions.filter(
+        (x) => x.exam_id && !x.topic_id
+      );
+      const assignmentSessions = sessions.filter((x) => x.assignment_id);
+
+      const tags = [
+        ...exams.map((x) =>
+          `<span class="tag e">EXAM: ${esc(x.exam_name)} — ${esc(x.subject_name || '')}</span>`
+        ),
+        ...topicSessions.map((x) =>
+          `<span class="tag ${Number(x.rescheduled_from_missed) ? 'r' : 's'}">Topic: ${esc(x.title)} — ${esc(x.subject_name || '')} (${hrs(x.duration_hours)})</span>`
+        ),
+        ...examPrepSessions.map((x) =>
+          `<span class="tag ${Number(x.rescheduled_from_missed) ? 'r' : 's'}">Preparation: ${esc(x.title)} (${hrs(x.duration_hours)})</span>`
+        ),
+        ...assignmentSessions.map((x) =>
+          `<span class="tag ${Number(x.rescheduled_from_missed) ? 'r' : 's'}">Assignment study: ${esc(x.title)} (${hrs(x.duration_hours)})</span>`
+        ),
+        ...assignments.slice(0, 1).map((x) =>
+          `<span class="tag a">Due: ${esc(x.title)}</span>`
+        )
+      ].join('');
+
       const inner = `${dd.getDate()}${tags}`;
+
       cells += clickable
         ? `<button type="button" class="${cls.join(' ')}" data-date="${date}">${inner}</button>`
         : `<div class="${cls.join(' ')}">${inner}</div>`;
     }
+
     return `<div class="cal-head"><button class="btn small" data-cal="prev">Previous</button><strong>${esc(title)}</strong>
       <span><button class="btn small" data-cal="today">Today</button> <button class="btn small" data-cal="next">Next</button></span></div>
       <div class="cal">${cells}</div>
-      <div class="legend"><span>Blue: study sessions</span><span>Orange: assignment deadlines</span><span>Red: exams</span></div>`;
-  }
-  async function loadCalendarData(ym) {
-    const first = new Date(ym.y, ym.m, 1);
-    const from = addDays(fmt(first), -((first.getDay() + 6) % 7));
-    const to = addDays(from, 41);
-    const [items, assignments, exams] = await Promise.all([
-      api(`/planner${qs({ from, to })}`), api(`/assignments${qs({ from, to })}`), api(`/exams${qs({ from, to })}`)
-    ]);
-    return { sessions: groupBy(items.items, 'session_date'), assignments: groupBy(assignments, 'deadline'), exams: groupBy(exams, 'exam_date') };
-  }
-  const shiftMonth = (ym, delta) => { const d = new Date(ym.y, ym.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; };
-  const thisMonth = () => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; };
-
-  /* ---------- page shell (sidebar, top bar, notifications, theme) ---------- */
-  function buildShell() {
-    const user = currentUser();
-    const nav = user.role === 'admin'
-      ? [['admin', 'Admin panel'], ['profile', 'Profile']]
-      : [['dashboard', 'Dashboard'], ['subjects', 'Subjects and topics'], ['assignments', 'Assignments'], ['exams', 'Exams'],
-        ['planner', 'Study planner'], ['progress', 'Progress'], ['reports', 'Reports'], ['profile', 'Profile']];
-    $('#sidebar').innerHTML = `<div class="brand">Smart Study Planner</div><nav>${nav.map(([p, l]) => `<a href="${p}.html"${p === page ? ' class="active" aria-current="page"' : ''}>${l}</a>`).join('')}</nav>`;
-    const dark = document.documentElement.dataset.theme === 'dark';
-    $('#topbar').innerHTML = `<button class="btn small menu-btn" id="menu-btn">Menu</button><h1>${esc(document.body.dataset.title)}</h1>
-      <button class="btn small" id="theme-btn">${dark ? 'Light mode' : 'Dark mode'}</button>
-      <button class="btn small bell" id="bell-btn">Notifications<span class="count" id="bell-count" hidden></span></button>
-      <span class="muted small">${esc(user.name)}</span><button class="btn small" id="logout-btn">Log out</button>
-      <div class="dropdown" id="note-panel"></div>`;
-
-    $('#menu-btn').onclick = () => $('#sidebar').classList.toggle('open');
-    $('#theme-btn').onclick = () => {
-      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-      document.documentElement.dataset.theme = next;
-      localStorage.setItem('theme', next);
-      $('#theme-btn').textContent = next === 'dark' ? 'Light mode' : 'Dark mode';
-    };
-    $('#logout-btn').onclick = async () => {
-      try { await api('/auth/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
-      clearSession();
-      location.href = 'login.html';
-    };
-    $('#bell-btn').onclick = (e) => { e.stopPropagation(); $('#note-panel').classList.toggle('open'); };
-    document.addEventListener('click', (e) => { if (!e.target.closest('#note-panel')) $('#note-panel').classList.remove('open'); });
-    loadNotifications();
+      <div class="legend"><span>Blue: topics and preparation</span><span>Orange: assignment deadlines</span><span>Red: exams</span></div>`;
   }
 
   async function loadNotifications() {
@@ -266,7 +265,7 @@
         ${stat('Study hours done', hrs(d.hours.completed), `of ${hrs(d.hours.planned)} planned`)}${stat('Completion', `${d.completion_percentage}%`)}</div>
       <div class="grid two">
         <div class="card"><h2>Today's schedule</h2><div id="today">${d.today_sessions.length ? `<ul class="list">${d.today_sessions.map((i) => `
-          <li><div><strong>${hhmm(i.start_time)}-${hhmm(i.end_time)}</strong> ${esc(i.title)}<div class="small muted">${esc(i.subject_name)}</div></div>
+          <li><div><strong>${esc(i.title)}</strong><div class="small muted">${esc(i.subject_name)} · ${hrs(i.duration_hours)}</div></div>
           <div class="row-actions">${badge(i.status)}${sessionButtons(i)}</div></li>`).join('')}</ul>` : '<p class="empty">Nothing scheduled today. Generate a plan to fill your week.</p>'}</div></div>
         <div class="card"><h2>Notifications</h2>${d.notifications.length ? `<ul class="list">${d.notifications.map((n) => `<li><span>${esc(n.message)}</span></li>`).join('')}</ul>` : '<p class="empty">You are all caught up.</p>'}</div>
       </div>
@@ -443,15 +442,13 @@
       { label: 'Exam', html: (e) => `<strong>${esc(e.exam_name)}</strong>` },
       { label: 'Subject', value: (e) => e.subject_name },
       { label: 'Date', html: (e) => `${esc(e.exam_date)} ${e.exam_date < today() ? badge('Past') : ''}` },
-      { label: 'Priority', html: (e) => badge(e.priority) },
-      { label: 'Preparation hours', value: (e) => e.preparation_hours }
+      { label: 'Priority', html: (e) => badge(e.priority) }
     ],
     fields: (subjects) => [
       { name: 'subject_id', label: 'Subject', type: 'select', options: subjectOptions(subjects) },
       { name: 'exam_name', label: 'Exam name' },
       { name: 'exam_date', label: 'Exam date', type: 'date' },
-      { name: 'priority', label: 'Priority', type: 'select', options: PRIORITIES, default: 'Medium' },
-      { name: 'preparation_hours', label: 'Preparation hours', type: 'number', step: '0.5', min: '0.5' }
+      { name: 'priority', label: 'Priority', type: 'select', options: PRIORITIES, default: 'Medium' }
     ]
   });
 
@@ -459,18 +456,18 @@
     const subjects = await api('/subjects');
     const state = { view: 'week', date: today(), ym: thisMonth() };
     content.innerHTML = `
-            <div class="page-head"><h2>Study planner</h2><div class="row-actions"><button class="btn primary" id="gen">Generate plan</button><button class="btn" id="resched">Reschedule</button><button class="btn" id="download-pdf">Download Timetable PDF</button></div></div>
+            <div class="page-head"><h2>Study planner</h2><div class="row-actions"><button class="btn primary" id="gen">Generate Timetable</button><button class="btn" id="resched">Reschedule</button><button class="btn" id="download-pdf">Download Timetable PDF</button></div></div>
       <div id="plan-notice"></div>
       <div class="card"><div class="filters">
-        <div class="tabs" id="views"><button class="btn" data-view="day">Day</button><button class="btn" data-view="week">Week</button><button class="btn" data-view="month">Month</button></div>
-        <div class="row-actions"><button class="btn small" data-nav="-1">Previous</button><button class="btn small" data-nav="0">Today</button><button class="btn small" data-nav="1">Next</button></div>
+        <div class="tabs" id="views"><button class="btn" data-view="day">Today</button><button class="btn" data-view="week">Week</button><button class="btn" data-view="month">Month</button></div>
+        
         ${selectFilter('f-status', 'Status', [['', 'All statuses'], 'Planned', 'Completed', 'Missed'])}${selectFilter('f-subject', 'Subject', subjectOptions(subjects, true))}</div>
         <h3 id="range-title"></h3><div id="plan-view"></div></div>
       <div class="card" style="margin-top:16px"><div class="page-head"><h2>Study goals</h2><button class="btn small primary" id="add-goal">Add goal</button></div>
-        <div id="goals"></div><p class="small muted">The planner uses your latest daily goal (2 hours if none is set) and your latest weekly goal as limits.</p></div>`;
+        <div id="goals"></div><p class="small muted">The planner uses your latest daily goal (4 hours if none is set) and your latest weekly goal as limits.</p></div>`;
 
-    const sessionHtml = (i) => `<div class="session ${esc(i.status.toLowerCase())}"><strong>${hhmm(i.start_time)}-${hhmm(i.end_time)}</strong>
-      <div>${esc(i.title)}</div><div class="time">${esc(i.subject_name)}, ${hrs(i.duration_hours)}</div>
+    const sessionHtml = (i) => `<div class="session ${esc(i.status.toLowerCase())}${Number(i.rescheduled_from_missed) ? ' rescheduled' : ''}"><strong>${esc(i.title)}</strong>
+      <div class="time">${esc(i.subject_name)} · ${hrs(i.duration_hours)}</div>
       <div class="row-actions">${badge(i.status)}${sessionButtons(i)}</div></div>`;
 
     async function render() {
@@ -487,9 +484,10 @@
       const data = await api(`/planner${qs({ from, to, ...filters })}`);
       $('#range-title').innerHTML = `${esc(state.view === 'day' ? niceDate(from) : `${niceDate(from)} to ${niceDate(to)}`)}
         <span class="muted small"> Planned ${hrs(data.summary.planned_hours)}, completed ${hrs(data.summary.completed_hours)}, missed sessions ${data.summary.missed_sessions}</span>`;
-      const byDate = groupBy(data.items, 'session_date');
+      const activeItems = data.items.filter((item) => item.status !== 'Missed');
+      const byDate = groupBy(activeItems, 'session_date');
       if (state.view === 'day') {
-        view.innerHTML = data.items.length ? data.items.map(sessionHtml).join('') : '<p class="empty">No study sessions on this day. Generate a plan or pick another day.</p>';
+        view.innerHTML = activeItems.length ? activeItems.map(sessionHtml).join('') : '<p class="empty">No study sessions on this day. Generate a plan or pick another day.</p>';
       } else {
         const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
         view.innerHTML = `<div class="week">${days.map((d) => `<div class="col"><h3>${esc(niceDate(d))}</h3>${(byDate[d] || []).map(sessionHtml).join('') || '<span class="muted small">Free</span>'}</div>`).join('')}</div>`;
@@ -501,7 +499,7 @@
         { label: 'Type', value: (g) => g.goal_type }, { label: 'Subject', value: (g) => g.subject_name || 'All' },
         { label: 'Target hours', value: (g) => g.target_hours },
         { label: 'Actions', actions: true, html: (g) => `<button class="btn small" data-goal="edit" data-id="${g.goal_id}">Edit</button> <button class="btn small danger" data-goal="del" data-id="${g.goal_id}">Delete</button>` }
-      ], goals, 'No goals yet. The planner will use 2 study hours per day.');
+      ], goals, 'No goals yet. The planner will use 4 study hours per day.');
       content.goals = goals;
     }
     const goalFields = [
@@ -527,21 +525,83 @@ $('#download-pdf').onclick = async () => {
       to = addDays(from, 6);
     } else {
       from = `${state.ym.y}-${String(state.ym.m + 1).padStart(2, '0')}-01`;
-      to = new Date(state.ym.y, state.ym.m + 1, 0)
-        .toISOString().slice(0, 10);
+      to = fmt(new Date(state.ym.y, state.ym.m + 1, 0));
     }
 
     const data = await api(`/planner${qs({ from, to, ...filters })}`);
 
-    const rows = data.items.map((i) => `
-      <tr>
-        <td>${esc(i.session_date)}</td>
-        <td>${esc(hhmm(i.start_time))} - ${esc(hhmm(i.end_time))}</td>
-        <td>${esc(i.title)}</td>
-        <td>${esc(i.subject_name)}</td>
-        <td>${esc(hrs(i.duration_hours))}</td>
-        <td>${esc(i.status)}</td>
-      </tr>
+    // Exclude missed sessions from the PDF.
+    const sessions = (data.items || []).filter(
+      (item) => item.status !== 'Missed'
+    );
+
+    const sessionsByDate = groupBy(sessions, 'session_date');
+
+    // Select the month to display in the calendar.
+    const calendarMonth = state.view === 'month' ? state.ym : (() => {
+      const d = parse(from);
+      return { y: d.getFullYear(), m: d.getMonth() };
+    })();
+
+    const monthFirst = new Date(calendarMonth.y, calendarMonth.m, 1);
+    const monthTitle = monthFirst.toLocaleDateString(undefined, {
+      month: 'long',
+      year: 'numeric'
+    });
+
+    const gridStart = addDays(
+      fmt(monthFirst),
+      -((monthFirst.getDay() + 6) % 7)
+    );
+
+    const calendarCells =
+      ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        .map((day) => `<div class="dow">${day}</div>`)
+        .join('') +
+      Array.from({ length: 42 }, (_, index) => {
+        const date = addDays(gridStart, index);
+        const dayDate = parse(date);
+        const daySessions = sessionsByDate[date] || [];
+        const classes = ['day'];
+
+        if (dayDate.getMonth() !== calendarMonth.m) {
+          classes.push('other');
+        }
+
+        if (date === today()) {
+          classes.push('today');
+        }
+
+        if (daySessions.length) {
+          classes.push('has-session');
+        }
+
+        return `
+          <div class="${classes.join(' ')}">
+            <span class="day-number">${dayDate.getDate()}</span>
+            ${daySessions.length
+              ? `<span class="session-count">
+                  ${daySessions.length} session${daySessions.length === 1 ? '' : 's'}
+                </span>`
+              : ''}
+          </div>
+        `;
+      }).join('');
+
+    // Show the date on the left and study details on the right.
+    const rows = sessions.map((item) => `
+      <div class="session-row">
+        <div class="session-date">
+          ${esc(niceDate(String(item.session_date).slice(0, 10)))}
+        </div>
+        <div class="session-details">
+          <strong>${esc(item.title)}</strong>
+          <div>
+            ${esc(item.subject_name || 'Subject not specified')}
+            · ${esc(hrs(item.duration_hours))}
+          </div>
+        </div>
+      </div>
     `).join('');
 
     const printWindow = window.open('', '_blank');
@@ -556,41 +616,158 @@ $('#download-pdf').onclick = async () => {
       <html>
       <head>
         <title>Study Timetable</title>
+        <meta charset="utf-8">
+
         <style>
-          body { font-family: Arial, sans-serif; padding: 24px; color: #222; }
-          h1 { color: #5145cd; }
-          p { color: #555; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-          th { background: #5145cd; color: white; }
-          tr:nth-child(even) { background: #f4f4f8; }
-          @media print { body { padding: 0; } }
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            font-family: Arial, sans-serif;
+            padding: 24px;
+            color: #222;
+          }
+
+          h1 {
+            color: #5145cd;
+            margin: 0 0 8px;
+          }
+
+          h2 {
+            margin: 22px 0 10px;
+            font-size: 18px;
+          }
+
+          p {
+            color: #555;
+            margin: 0 0 16px;
+          }
+
+          .calendar-title {
+            text-align: center;
+            font-size: 17px;
+            font-weight: 700;
+            margin: 12px 0;
+          }
+
+          .cal {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 4px;
+          }
+
+          .dow {
+            text-align: center;
+            padding: 8px 2px;
+            font-weight: 700;
+            background: #f0efff;
+            color: #5145cd;
+          }
+
+          .day {
+            min-height: 54px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 5px;
+            font-size: 12px;
+          }
+
+          .day.other {
+            color: #aaa;
+            background: #fafafa;
+          }
+
+          .day.today {
+            border: 2px solid #5145cd;
+          }
+
+          .day.has-session {
+            background: #e7eaff;
+            border-color: #7771e8;
+          }
+
+          .day-number {
+            display: block;
+            font-weight: 700;
+          }
+
+          .session-count {
+            display: inline-block;
+            margin-top: 5px;
+            padding: 3px 4px;
+            border-radius: 3px;
+            background: #5145cd;
+            color: #fff;
+            font-size: 10px;
+          }
+
+          .session-row {
+            display: grid;
+            grid-template-columns: 155px minmax(0, 1fr);
+            gap: 14px;
+            padding: 11px 12px;
+            border-bottom: 1px solid #ddd;
+            break-inside: avoid;
+          }
+
+          .session-date {
+            font-weight: 700;
+            color: #5145cd;
+          }
+
+          .session-details > div {
+            color: #555;
+            margin-top: 4px;
+            font-size: 13px;
+          }
+
+          .empty {
+            padding: 12px;
+            color: #666;
+          }
+
+          @page {
+            size: A4 portrait;
+            margin: 14mm;
+          }
+
+          @media print {
+            body {
+              padding: 0;
+            }
+
+            .session-row {
+              break-inside: avoid;
+            }
+          }
         </style>
       </head>
+
       <body>
         <h1>My Study Timetable</h1>
+
         <p>Period: ${esc(from)} to ${esc(to)}</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th><th>Time</th><th>Study Topic</th>
-              <th>Subject</th><th>Duration</th><th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows || '<tr><td colspan="6">No study sessions found.</td></tr>'}
-          </tbody>
-        </table>
+
+        <div class="calendar-title">${esc(monthTitle)}</div>
+
+        <div class="cal">
+          ${calendarCells}
+        </div>
+
+        <h2>Scheduled Study Sessions</h2>
+
+        ${rows || '<div class="empty">No scheduled study sessions found for this period.</div>'}
+
         <script>
-          window.onload = () => {
-            window.print();
-          };
+          window.onload = () => window.print();
         <\/script>
       </body>
       </html>
     `);
 
     printWindow.document.close();
+
   } catch (err) {
     toast(err.message, true);
   }
@@ -604,7 +781,13 @@ $('#download-pdf').onclick = async () => {
       const cal = e.target.closest('[data-cal]');
       const day = e.target.closest('[data-date]');
       const goal = e.target.closest('[data-goal]');
-      if (view) { state.view = view.dataset.view; return refresh(); }
+      if (view) {
+        if (view.dataset.view === 'day' && state.view === 'month') {
+          state.date = today();
+      }
+  state.view = view.dataset.view;
+  return refresh();
+}
       if (nav) {
         const n = Number(nav.dataset.nav);
         if (state.view === 'month') state.ym = n === 0 ? thisMonth() : shiftMonth(state.ym, n);
@@ -653,7 +836,7 @@ $('#download-pdf').onclick = async () => {
     async function load() {
       const rows = await api(`/progress${qs({ status: $('#f-status').value, subject_id: $('#f-subject').value, from: $('#f-from').value, to: $('#f-to').value })}`);
       $('#list').innerHTML = tableHtml([
-        { label: 'Date', value: (r) => r.session_date }, { label: 'Time', value: (r) => `${hhmm(r.start_time)}-${hhmm(r.end_time)}` },
+        { label: 'Date', value: (r) => r.session_date },
         { label: 'Task', value: (r) => r.title }, { label: 'Subject', value: (r) => r.subject_name },
         { label: 'Hours', value: (r) => r.duration_hours }, { label: 'Status', html: (r) => badge(r.status) },
         { label: 'Actions', actions: true, html: (r) => sessionButtons(r) }
@@ -690,7 +873,7 @@ $('#download-pdf').onclick = async () => {
       <form class="card" id="profile-form" novalidate><h2>Your profile</h2>
         <label>Email<input type="email" value="${esc(me.email)}" disabled></label>
         ${[{ name: 'name', label: 'Full name' }, { name: 'phone', label: 'Phone' }, { name: 'institution', label: 'Institution' }, { name: 'course', label: 'Course' },
-          { name: 'preferred_start_time', label: 'Preferred daily study start time', type: 'time' }].map((f) => fieldHtml(f, f.name === 'preferred_start_time' ? hhmm(me[f.name] || '17:00') : me[f.name])).join('')}
+          ].map((f) => fieldHtml(f, me[f.name])).join('')}
         <div class="form-error"></div><button class="btn primary" type="submit">Save profile</button></form>
       <form class="card" id="password-form" novalidate><h2>Change password</h2>
         <label>Current password<input type="password" name="current_password" autocomplete="current-password"></label>
@@ -771,6 +954,150 @@ $('#download-pdf').onclick = async () => {
     });
     show('overview');
   };
+
+
+  /* ---------- missing shared shell and calendar data helpers ---------- */
+  function thisMonth() {
+    const d = new Date();
+    return { y: d.getFullYear(), m: d.getMonth() };
+  }
+
+  function shiftMonth(ym, offset) {
+    const d = new Date(ym.y, ym.m + offset, 1);
+    return { y: d.getFullYear(), m: d.getMonth() };
+  }
+
+  async function loadCalendarData(ym) {
+    const first = fmt(new Date(ym.y, ym.m, 1));
+    const last = fmt(new Date(ym.y, ym.m + 1, 0));
+    const gridStart = addDays(first, -((parse(first).getDay() + 6) % 7));
+    const gridEnd = addDays(gridStart, 41);
+
+    const [planData, assignmentRows, examRows] = await Promise.all([
+      api(`/planner${qs({ from: gridStart, to: gridEnd })}`),
+      api('/assignments'),
+      api('/exams')
+    ]);
+
+    const data = { sessions: {}, assignments: {}, exams: {} };
+    (planData.items || []).forEach((item) => {
+      const date = String(item.session_date).slice(0, 10);
+      (data.sessions[date] = data.sessions[date] || []).push(item);
+    });
+    (assignmentRows || []).forEach((item) => {
+      const date = String(item.deadline || '').slice(0, 10);
+      if (date >= gridStart && date <= gridEnd) {
+        (data.assignments[date] = data.assignments[date] || []).push(item);
+      }
+    });
+    (examRows || []).forEach((item) => {
+      const date = String(item.exam_date || '').slice(0, 10);
+      if (date >= gridStart && date <= gridEnd) {
+        (data.exams[date] = data.exams[date] || []).push(item);
+      }
+    });
+    return data;
+  }
+
+  
+function buildShell() {
+  const sidebar = $('#sidebar');
+  const topbar = $('#topbar');
+  const user = currentUser() || {};
+  const isAdmin = user.role === 'admin';
+
+  const links = isAdmin
+    ? [['admin.html', 'Overview', 'admin'], ['profile.html', 'Profile', 'profile']]
+    : [
+        ['dashboard.html', 'Dashboard', 'dashboard'],
+        ['subjects.html', 'Subjects & topics', 'subjects'],
+        ['assignments.html', 'Assignments', 'assignments'],
+        ['exams.html', 'Exams', 'exams'],
+        ['planner.html', 'Study planner', 'planner'],
+        ['progress.html', 'Progress', 'progress'],
+        ['reports.html', 'Reports', 'reports'],
+        ['profile.html', 'Profile', 'profile']
+      ];
+
+  if (sidebar) {
+    sidebar.innerHTML = `
+      <div class="brand">
+        <a href="${isAdmin ? 'admin.html' : 'dashboard.html'}">
+          <img src="logo.png" alt="Logo">
+          Smart Study Planner
+        </a>
+      </div>
+      <nav class="nav">
+        ${links.map(([href, label, key]) =>
+          `<a class="nav-link${page === key ? ' active' : ''}" href="${href}">${label}</a>`
+        ).join('')}
+      </nav>
+      <div class="sidebar-bottom">
+        <button class="btn" id="logout">Log out</button>
+      </div>`;
+
+    const logout = $('#logout', sidebar);
+    if (logout) logout.onclick = async () => {
+      try {
+        await api('/auth/logout', { method: 'POST' });
+      } catch (e) {}
+      clearSession();
+      location.href = 'login.html';
+    };
+  }
+
+  if (topbar) {
+    const dark = document.documentElement.dataset.theme === 'dark';
+
+    topbar.innerHTML = `
+      <button class="btn small menu-btn" id="menu-btn">☰</button>
+      <h1>${esc(document.body.dataset.title || 'Smart Study Planner')}</h1>
+      <button class="btn small" id="theme-btn">
+        ${dark ? 'Light mode' : 'Dark mode'}
+      </button>
+      <button class="btn small bell" id="bell-btn">
+        Notifications <span class="count" id="bell-count" hidden></span>
+      </button>
+      <span class="muted small">${esc(user.name || 'Student')}</span>
+      <button class="btn small" id="logout-btn">Log out</button>
+      <div class="dropdown" id="note-panel"></div>`;
+
+    $('#menu-btn').onclick = () => sidebar.classList.toggle('open');
+
+    $('#theme-btn').onclick = () => {
+      const next = document.documentElement.dataset.theme === 'dark'
+        ? 'light' : 'dark';
+
+      document.documentElement.dataset.theme = next;
+      localStorage.setItem('theme', next);
+      $('#theme-btn').textContent =
+        next === 'dark' ? 'Light mode' : 'Dark mode';
+    };
+
+    $('#logout-btn').onclick = async () => {
+      try {
+        await api('/auth/logout', { method: 'POST' });
+      } catch (e) {}
+      clearSession();
+      location.href = 'login.html';
+    };
+
+    $('#bell-btn').onclick = (e) => {
+      e.stopPropagation();
+      $('#note-panel').classList.toggle('open');
+    };
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#note-panel') &&
+          !e.target.closest('#bell-btn')) {
+        $('#note-panel').classList.remove('open');
+      }
+    });
+
+    loadNotifications();
+  }
+}
+
 
   /* ---------- start ---------- */
   if (page === 'login' || page === 'register') {
