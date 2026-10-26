@@ -53,8 +53,14 @@ function calculateTaskPriority(task, today = todayStr()) {
  */
 function generateSchedule(tasks, options = {}) {
   const {
-    startDate = todayStr(), dailyHours = 2, weeklyHours = null, dayStartTime = '17:00',
-    maxSessionHours = 2, maxDays = 90, existingSessions = []
+    startDate = todayStr(),
+    dailyHours = 4,
+    weeklyHours = null,
+    dayStartTime = '17:00',
+    maxSessionHours = 1.5,
+    breakMinutes = 15,
+    maxDays = 90,
+    existingSessions = []
   } = options;
 
   const sessions = [];
@@ -64,65 +70,152 @@ function generateSchedule(tasks, options = {}) {
   const weekUsed = {};
 
   for (const s of existingSessions) {
-    usedHours[s.date] = (usedHours[s.date] || 0) + Number(s.durationHours);
-    nextFree[s.date] = Math.max(nextFree[s.date] || 0, timeToMinutes(s.endTime));
+    usedHours[s.date] =
+      (usedHours[s.date] || 0) + Number(s.durationHours || 0);
+
+    nextFree[s.date] = Math.max(
+      nextFree[s.date] || 0,
+      timeToMinutes(s.endTime)
+    );
+
     const wk = weekStart(s.date);
-    weekUsed[wk] = (weekUsed[wk] || 0) + Number(s.durationHours);
+    weekUsed[wk] =
+      (weekUsed[wk] || 0) + Number(s.durationHours || 0);
   }
 
   const active = [];
+
   for (const t of tasks) {
     const remaining = roundUpHalf(t.hoursRemaining);
+
     if (remaining <= 0) continue;
-    // Exams must be prepared for BEFORE the exam day; assignments can be worked on up to the deadline day.
-    const lastDay = t.type === 'exam' ? addDays(t.deadline, -1) : t.deadline;
+
+    const mustFinishBeforeDeadline =
+      t.type === 'exam' || t.type === 'topic';
+
+    const lastDay = mustFinishBeforeDeadline
+      ? addDays(t.deadline, -1)
+      : t.deadline;
+
     const item = { ...t, remaining, lastDay };
-    if (t.type === 'exam' && lastDay < startDate) {
-      unscheduled.push(toUnscheduled(item, 'Exam is too close or has already passed'));
+
+    if (mustFinishBeforeDeadline && lastDay < startDate) {
+      unscheduled.push(
+        toUnscheduled(
+          item,
+          t.type === 'topic'
+            ? 'Exam is too close or has already passed'
+            : 'Exam is too close or has already passed'
+        )
+      );
     } else {
       active.push(item);
     }
   }
 
-  for (let i = 0; i < maxDays && active.some((t) => t.remaining > 0); i++) {
+  for (
+    let i = 0;
+    i < maxDays && active.some((t) => t.remaining > 0);
+    i++
+  ) {
     const date = addDays(startDate, i);
     const wk = weekStart(date);
+
     let capacity = dailyHours - (usedHours[date] || 0);
-    if (weeklyHours) capacity = Math.min(capacity, weeklyHours - (weekUsed[wk] || 0));
+
+    if (weeklyHours !== null && weeklyHours !== undefined) {
+      capacity = Math.min(
+        capacity,
+        weeklyHours - (weekUsed[wk] || 0)
+      );
+    }
+
     capacity = Math.floor(capacity * 2) / 2;
-    let cursor = Math.max(timeToMinutes(dayStartTime), nextFree[date] || 0);
+
+    let cursor = Math.max(
+      timeToMinutes(dayStartTime),
+      nextFree[date] || 0
+    );
+    if ((nextFree[date] || 0) >= timeToMinutes(dayStartTime)) {
+      cursor += Math.max(0, Number(breakMinutes) || 0);
+    }
+
     const todayHours = {};
+    let lastSubjectId = null;
+    let lastTaskKey = null;
 
     while (capacity >= MIN_BLOCK) {
-      // Overdue assignments (lastDay before startDate) may be studied on any day.
-      const candidates = active.filter((t) => t.remaining > 0 && (t.lastDay >= date || t.lastDay < startDate));
+      const candidates = active.filter(
+        (t) => t.remaining > 0 && t.lastDay >= date
+      );
+
       if (!candidates.length) break;
-      // Dividing by hours already given today spreads time across tasks instead of one task taking it all.
-      const scored = candidates.map((t) => ({ t, score: calculateTaskPriority({ ...t }, date) / (1 + (todayHours[t.key] || 0)) }));
+
+      const scored = candidates.map((t) => ({
+        t,
+        score:
+          (calculateTaskPriority({ ...t }, date) +
+            (t.type === 'topic' ? 12 : 0)) /
+          (1 + (todayHours[t.key] || 0)) +
+          (String(t.subjectId) === String(lastSubjectId) ? 8 : 0) +
+          (t.key === lastTaskKey ? 4 : 0)
+      }));
+
       scored.sort((a, b) => b.score - a.score);
+
       const task = scored[0].t;
-      const block = Math.min(capacity, task.remaining, maxSessionHours);
-      if (cursor + block * 60 > 24 * 60) break; // never run past midnight
+      const block = Math.min(
+        capacity,
+        task.remaining,
+        maxSessionHours
+      );
+
+      if (block < MIN_BLOCK) break;
+      if (cursor + block * 60 > 24 * 60) break;
 
       sessions.push({
         date,
         startTime: minutesToTime(cursor),
         endTime: minutesToTime(cursor + block * 60),
         durationHours: block,
-        key: task.key, type: task.type, refId: task.refId, subjectId: task.subjectId, title: task.title
+        key: task.key,
+        type: task.type,
+        refId: task.refId,
+        subjectId: task.subjectId,
+        title: task.title
       });
+
       cursor += block * 60;
       capacity -= block;
       task.remaining -= block;
-      todayHours[task.key] = (todayHours[task.key] || 0) + block;
-      usedHours[date] = (usedHours[date] || 0) + block;
-      weekUsed[wk] = (weekUsed[wk] || 0) + block;
+      lastSubjectId = task.subjectId;
+      lastTaskKey = task.key;
+      if (capacity >= MIN_BLOCK) {
+        cursor += Math.max(0, Number(breakMinutes) || 0);
+      }
+
+      todayHours[task.key] =
+        (todayHours[task.key] || 0) + block;
+
+      usedHours[date] =
+        (usedHours[date] || 0) + block;
+
+      weekUsed[wk] =
+        (weekUsed[wk] || 0) + block;
     }
   }
 
   for (const t of active) {
-    if (t.remaining > 0) unscheduled.push(toUnscheduled(t, 'Not enough study time before the deadline. Increase daily hours or move the deadline.'));
+    if (t.remaining > 0) {
+      unscheduled.push(
+        toUnscheduled(
+          t,
+          'Not enough study time before the deadline. Increase daily hours or move the deadline.'
+        )
+      );
+    }
   }
+
   return { sessions, unscheduled };
 }
 
@@ -161,7 +254,183 @@ function calculateProgressPercentage(completed, total) {
   return Math.min(100, Math.round((c / t) * 1000) / 10);
 }
 
+
+/** Randomly schedules topics before their subject's exam date. */
+
+function generateTopicSchedule(topics, exams, options = {}) {
+  const {
+    startDate = todayStr(),
+    dailyHours = 2,
+    weeklyHours = null,
+    dayStartTime = '17:00',
+    maxSessionHours = 2,
+    maxDays = 90,
+    existingSessions = [],
+    random = Math.random
+  } = options;
+
+  const sessions = [];
+  const unscheduled = [];
+  const usedHours = {};
+  const nextFree = {};
+  const weekUsed = {};
+
+  for (const s of existingSessions) {
+    usedHours[s.date] = (usedHours[s.date] || 0) + Number(s.durationHours || 0);
+    nextFree[s.date] = Math.max(
+      nextFree[s.date] || 0,
+      timeToMinutes(s.endTime)
+    );
+    const wk = weekStart(s.date);
+    weekUsed[wk] = (weekUsed[wk] || 0) + Number(s.durationHours || 0);
+  }
+
+  const examBySubject = new Map();
+
+  for (const exam of exams) {
+    const subjectId = exam.subjectId ?? exam.subject_id;
+    const examDate = String(exam.examDate ?? exam.exam_date).slice(0, 10);
+    const key = String(subjectId);
+    const current = examBySubject.get(key);
+
+    if (subjectId != null && (!current || examDate < current.examDate)) {
+      examBySubject.set(key, { examDate });
+    }
+  }
+
+  const pending = topics
+    .filter((topic) => topic.status !== 'Completed')
+    .map((topic) => {
+      const topicId = topic.topic_id ?? topic.topicId;
+      const subjectId = topic.subject_id ?? topic.subjectId;
+      const exam = examBySubject.get(String(subjectId));
+
+      return {
+        key: `t-${topicId}`,
+        type: 'topic',
+        refId: topicId,
+        subjectId,
+        title: topic.topic_name ?? topic.topicName,
+        deadline: exam ? exam.examDate : null,
+        remaining: 1
+      };
+    });
+
+  const active = [];
+
+  for (const topic of pending) {
+    if (topic.refId == null || !topic.title || !topic.deadline) {
+      unscheduled.push({
+        key: topic.key,
+        type: 'topic',
+        refId: topic.refId,
+        title: topic.title || 'Unnamed topic',
+        hours: 1,
+        reason: 'No upcoming exam date found for this subject'
+      });
+      continue;
+    }
+
+    topic.lastDay = addDays(topic.deadline, -1);
+
+    if (topic.lastDay < startDate) {
+      unscheduled.push({
+        key: topic.key,
+        type: 'topic',
+        refId: topic.refId,
+        title: topic.title,
+        hours: 1,
+        reason: 'Exam is too close or has already passed'
+      });
+      continue;
+    }
+
+    active.push(topic);
+  }
+
+  for (let i = 0; i < maxDays && active.some((t) => t.remaining > 0); i++) {
+    const date = addDays(startDate, i);
+    const wk = weekStart(date);
+    let capacity = dailyHours - (usedHours[date] || 0);
+
+    if (weeklyHours !== null && weeklyHours !== undefined) {
+      capacity = Math.min(capacity, weeklyHours - (weekUsed[wk] || 0));
+    }
+
+    capacity = Math.floor(capacity * 2) / 2;
+    let cursor = Math.max(
+      timeToMinutes(dayStartTime),
+      nextFree[date] || 0
+    );
+
+    while (capacity >= MIN_BLOCK) {
+      const candidates = active.filter(
+        (t) => t.remaining > 0 && t.lastDay >= date
+      );
+
+      if (!candidates.length) break;
+
+      // Consider only topics tied to the earliest upcoming exam date.
+      const earliestExamDay = Math.min(
+        ...candidates.map((t) => daysBetween(date, t.lastDay))
+      );
+
+      const priorityCandidates = candidates.filter(
+        (t) => daysBetween(date, t.lastDay) === earliestExamDay
+      );
+
+      // Randomly choose among topics with the same exam deadline.
+      const index = Math.min(
+        priorityCandidates.length - 1,
+        Math.floor(random() * priorityCandidates.length)
+      );
+      const topic = priorityCandidates[index];
+
+      const block = Math.min(1, capacity, maxSessionHours);
+
+      if (block < MIN_BLOCK || cursor + block * 60 > 24 * 60) break;
+
+      sessions.push({
+        date,
+        startTime: minutesToTime(cursor),
+        endTime: minutesToTime(cursor + block * 60),
+        durationHours: block,
+        key: topic.key,
+        type: 'topic',
+        refId: topic.refId,
+        subjectId: topic.subjectId,
+        title: topic.title
+      });
+
+      cursor += block * 60;
+      capacity -= block;
+      topic.remaining -= block;
+      usedHours[date] = (usedHours[date] || 0) + block;
+      weekUsed[wk] = (weekUsed[wk] || 0) + block;
+    }
+  }
+
+  for (const topic of active) {
+    if (topic.remaining > 0) {
+      unscheduled.push({
+        key: topic.key,
+        type: 'topic',
+        refId: topic.refId,
+        title: topic.title,
+        hours: topic.remaining,
+        reason: 'Not enough study time before the exam'
+      });
+    }
+  }
+
+  return { sessions, unscheduled };
+}
+
+
 module.exports = {
   calculateStudyHours, sumStudyHours, validateDeadline, calculateTaskPriority,
-  generateSchedule, markMissedSessions, rescheduleIncompleteTasks, calculateProgressPercentage
+  generateSchedule, markMissedSessions, rescheduleIncompleteTasks,
+  calculateProgressPercentage, generateTopicSchedule
 };
+
+

@@ -129,7 +129,13 @@ async function validateExam(body, existing, userId) {
     exam_name: requiredText(body, 'exam_name', 'Exam name', 150, errors),
     exam_date: dateField(body, 'exam_date', 'Exam date', existing, errors),
     priority: enumValue(body, 'priority', 'Priority', PRIORITIES, 'Medium', errors),
-    preparation_hours: positiveNumber(body, 'preparation_hours', 'Preparation hours', 500, errors)
+    // Kept in the database for backward compatibility. The planner estimates
+    // preparation time automatically, so this field is no longer required.
+    preparation_hours: isBlank(body.preparation_hours)
+      ? (existing && Number(existing.preparation_hours) > 0
+        ? Number(existing.preparation_hours)
+        : 1)
+      : positiveNumber(body, 'preparation_hours', 'Preparation hours', 500, errors)
   };
   return { errors, value };
 }
